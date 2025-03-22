@@ -328,71 +328,45 @@ require_once 'config.php';
           </div>
         </div>
       `;
-      return fetchRecommendations(); // Retry once after resetting
+      return fetchRecommendations();
     }
 
     let progressValue = 0;
-
-    // Start with initial loading state
-    progress.style.width = '10%';
-    progressText.textContent = '10%';
+    const progressInterval = setInterval(() => {
+      if (progressValue < 90) {
+        // Slower at the beginning, faster towards 90%
+        const increment = Math.max(1, Math.floor((90 - progressValue) / 20));
+        progressValue += increment;
+        progress.style.width = `${progressValue}%`;
+        progressText.textContent = `${progressValue}%`;
+      }
+    }, 600);
 
     try {
       const response = await fetch('api.php');
       if (!response.ok) throw new Error('Failed to fetch recommendations');
-
-      // Data fetching started
-      progress.style.width = '40%';
-      progressText.textContent = '40%';
-
       const data = await response.json();
-
-      // Data received, start processing
-      progress.style.width = '70%';
-      progressText.textContent = '70%';
-
       const recommendations = data.recommendations;
 
-      // Clear loader and prepare for rendering
-      progress.style.width = '90%';
-      progressText.textContent = '90%';
+      clearInterval(progressInterval);
+      progress.style.width = '100%';
+      progressText.textContent = '100%';
 
-      // Clear container after small delay to show progress
       setTimeout(() => {
         container.innerHTML = '';
-        progress.style.width = '100%';
-        progressText.textContent = '100%';
+        recommendations.forEach(artist => {
+          const clone = template.content.cloneNode(true);
+          const link = clone.querySelector('.artist-link');
+          const img = clone.querySelector('.artist-image');
 
-        // Render recommendations after progress is complete
-        setTimeout(() => {
-          recommendations.forEach(artist => {
-            const clone = template.content.cloneNode(true);
-            const link = clone.querySelector('.artist-link');
-            const img = clone.querySelector('.artist-image');
+          link.href = artist.url;
 
-            link.href = artist.url;
-
-            if (artist.image) {
-              console.log('Setting image for', artist.name, ':', artist.image);
-              img.src = artist.image;
-              img.alt = artist.name;
-              img.onerror = () => {
-                console.log('Image failed to load for', artist.name);
-                img.remove();
-                const placeholder = document.createElement('div');
-                placeholder.className = 'artist-image';
-                placeholder.style.display = 'flex';
-                placeholder.style.alignItems = 'center';
-                placeholder.style.justifyContent = 'center';
-                placeholder.style.backgroundColor = '#e5e7eb';
-                placeholder.style.fontSize = '2rem';
-                placeholder.style.fontWeight = 'bold';
-                placeholder.textContent = artist.name[0].toUpperCase();
-                link.querySelector('.artist-card').insertBefore(placeholder, link.querySelector('.artist-content'));
-              };
-            } else {
-              console.log('No image for', artist.name);
-              // If no image, remove the img element and add a placeholder
+          if (artist.image) {
+            console.log('Setting image for', artist.name, ':', artist.image);
+            img.src = artist.image;
+            img.alt = artist.name;
+            img.onerror = () => {
+              console.log('Image failed to load for', artist.name);
               img.remove();
               const placeholder = document.createElement('div');
               placeholder.className = 'artist-image';
@@ -400,29 +374,50 @@ require_once 'config.php';
               placeholder.style.alignItems = 'center';
               placeholder.style.justifyContent = 'center';
               placeholder.style.backgroundColor = '#e5e7eb';
+              placeholder.style.fontSize = '2rem';
+              placeholder.style.fontWeight = 'bold';
               placeholder.textContent = artist.name[0].toUpperCase();
               link.querySelector('.artist-card').insertBefore(placeholder, link.querySelector('.artist-content'));
-            }
-            clone.querySelector('.artist-name').textContent = artist.name;
-            clone.querySelector('.artist-stats').innerHTML =
-              `${formatNumberEU(artist.listeners)} listeners • ${formatNumberEU(artist.playcount)} plays` +
-              (artist.isKnown ? `<br>${formatNumberEU(artist.userplaycount)} plays by you` : '') +
-              `<br><span class="match-reason"><svg style="transform: translate(-1px, 3px);" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg> We chose this because ${artist.isKnown ?
-                'you already like this artist' :
-                'it\'s similar to artists you like'} (${Math.round(artist.match * 100)}% match)</span>`;
-            clone.querySelector('.artist-summary').textContent = artist.summary;
+            };
+          } else {
+            console.log('No image for', artist.name);
+            // If no image, remove the img element and add a placeholder
+            img.remove();
+            const placeholder = document.createElement('div');
+            placeholder.className = 'artist-image';
+            placeholder.style.display = 'flex';
+            placeholder.style.alignItems = 'center';
+            placeholder.style.justifyContent = 'center';
+            placeholder.style.backgroundColor = '#e5e7eb';
+            placeholder.textContent = artist.name[0].toUpperCase();
+            link.querySelector('.artist-card').insertBefore(placeholder, link.querySelector('.artist-content'));
+          }
+          clone.querySelector('.artist-name').textContent = artist.name;
+          clone.querySelector('.artist-stats').innerHTML =
+            `${formatNumberEU(artist.listeners)} listeners • ${formatNumberEU(artist.playcount)} plays` +
+            (artist.isKnown ? `<br>${formatNumberEU(artist.userplaycount)} plays by you` : '') +
+            `<br><span class="match-reason"><svg style="transform: translate(-1px, 3px);" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg> We chose this because ${
+              artist.isKnown ?
+              (artist.lastplayed ?
+                `you last played this artist on ${new Date(artist.lastplayed * 1000).toLocaleDateString('en-GB', {
+                  month: 'long',
+                  year: 'numeric'
+                })}` :
+                'you already like this artist') :
+              'it\'s similar to artists you like'
+            } (${Math.round(artist.match * 100)}% match)</span>`;
+          clone.querySelector('.artist-summary').textContent = artist.summary;
 
-            const tagsContainer = clone.querySelector('.artist-tags');
-            artist.tags.forEach(tag => {
-              const span = document.createElement('span');
-              span.className = 'tag';
-              span.textContent = tag;
-              tagsContainer.appendChild(span);
-            });
-
-            container.appendChild(clone);
+          const tagsContainer = clone.querySelector('.artist-tags');
+          artist.tags.forEach(tag => {
+            const span = document.createElement('span');
+            span.className = 'tag';
+            span.textContent = tag;
+            tagsContainer.appendChild(span);
           });
-        }, 500);
+
+          container.appendChild(clone);
+        });
       }, 500);
     } catch (error) {
       const container = document.getElementById('recommendations');

@@ -4,10 +4,11 @@ class LastFmRecommender {
   private $username;
   private $baseUrl = 'http://ws.audioscrobbler.com/2.0/';
   private $cacheDir = 'cache';
-  private $cacheTime = 300; // 5 minutes
+  private $cacheTime = 60;
   private $knownArtistRatio = 0.2; // 20% known, 80% new artists
   private $maxTopArtists = 20; // Limit top artists
   private $maxSimilarArtists = 5; // Limit similar artists per artist
+  private $number_of_recommendations = 12;
 
   public function __construct( $apiKey, $username ) {
 		$this->apiKey = $apiKey;
@@ -99,6 +100,27 @@ class LastFmRecommender {
 		return null;
   }
 
+  private function getLastPlayedTime($artistName) {
+    $params = [
+      'method' => 'user.getartisttracks',
+      'user' => $this->username,
+      'artist' => $artistName,
+      'api_key' => $this->apiKey,
+      'format' => 'json',
+      'limit' => 1
+    ];
+
+    $url = $this->baseUrl . '?' . http_build_query($params);
+    $response = file_get_contents($url);
+    $data = json_decode($response, true);
+
+    if (isset($data['artisttracks']['track'][0]['date']['uts'])) {
+      return $data['artisttracks']['track'][0]['date']['uts'];
+    }
+
+    return null;
+  }
+
   public function getRecommendations() {
 		$cacheKey = $this->getCacheKey( 'recommendations', [ $this->username ] );
 		$cached = $this->getFromCache( $cacheKey );
@@ -149,6 +171,7 @@ class LastFmRecommender {
           'tags' => array_slice( array_column( $artistInfo['artist']['tags']['tag'] ?? [], 'name' ), 0, 5 ),
           'isKnown' => $isKnown,
           'userplaycount' => $isKnown ? ( $topArtists['topartists']['artist'][array_search( $similarArtist['name'], array_column( $topArtists['topartists']['artist'], 'name' ) )]['playcount'] ?? 0 ) : 0,
+          'lastplayed' => $this->getLastPlayedTime($similarArtist['name']),
 				];
 
 				if ( $isKnown ) {
@@ -162,20 +185,20 @@ class LastFmRecommender {
 		    }
 			}
 
-		shuffle( $knownArtists );
-		shuffle( $newArtists );
+		shuffle($knownArtists);
+		shuffle($newArtists);
 
-		$knownCount = min( ceil( 10 * $this->knownArtistRatio ), count( $knownArtists ) );
-		$newCount = min( 10 - $knownCount, count( $newArtists ) );
+		$knownCount = min(ceil(12 * $this->knownArtistRatio), count($knownArtists));
+		$newCount = min(12 - $knownCount, count($newArtists));
 
 		$recommendations = array_merge(
-		array_slice( $knownArtists, 0, $knownCount ),
-		array_slice( $newArtists, 0, $newCount )
+		array_slice($knownArtists, 0, $knownCount),
+		array_slice($newArtists, 0, $newCount)
 		);
 
-		shuffle( $recommendations );
-		$this->saveToCache( $cacheKey, $recommendations );
-		return array_slice( $recommendations, 0, 10 );
+		shuffle($recommendations);
+		$this->saveToCache($cacheKey, $recommendations);
+		return array_slice($recommendations, 0, 12);
   }
 
   public function getCacheExpiry() {
