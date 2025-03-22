@@ -35,7 +35,7 @@ try {
   $recommender = new LastFmRecommender( LASTFM_API_KEY, LASTFM_USERNAME );
 
   // Update the stream context creation
-  $ctx = stream_context_create([
+  $ctx = stream_context_create( [
     'http' => [
       'timeout' => 15,
       'ignore_errors' => true,
@@ -52,7 +52,7 @@ try {
       'verify_peer' => false,
       'verify_peer_name' => false,
     ],
-  ]);
+  ] );
 
   // Store the context in the recommender
   $recommender->setStreamContext( $ctx );
