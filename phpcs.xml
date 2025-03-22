@@ -119,5 +119,7 @@
 
     <!-- Include sniffs for PHP cross-version compatibility. -->
     <config name="testVersion" value="8.3"/>
-    <rule ref="PHPCompatibility"/>
+    <rule ref="PHPCompatibility">
+      <exclude name="PHPCompatibility.Variables.ForbiddenThisUseContexts.OutsideObjectContext"/>
+    </rule>
 </ruleset>

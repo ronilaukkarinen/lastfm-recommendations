@@ -1,8 +1,8 @@
 <?php
 error_reporting( E_ALL );
 ini_set( 'display_errors', 0 );
-ini_set( 'max_execution_time', 120 );
-set_time_limit( 120 );
+ini_set( 'max_execution_time', 60 );
+set_time_limit( 60 );
 
 header( 'Content-Type: application/json' );
 header( 'Cache-Control: no-cache, must-revalidate' );
@@ -37,11 +37,11 @@ try {
   // Update the stream context creation
   $ctx = stream_context_create([
     'http' => [
-      'timeout' => 60,
+      'timeout' => 10,
       'ignore_errors' => true,
       'user_agent' => 'PHP/LastFM-Recommendations',
       'follow_location' => 1,
-      'max_redirects' => 3,
+      'max_redirects' => 2,
       'protocol_version' => '1.1',
       'header' => [
         'Connection: close',
@@ -49,7 +49,7 @@ try {
       ],
     ],
     'ssl' => [
-      'verify_peer' => false, // Disable SSL verification temporarily for debugging
+      'verify_peer' => false,
       'verify_peer_name' => false,
     ],
   ]);
