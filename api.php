@@ -1,8 +1,8 @@
 <?php
 error_reporting( E_ALL );
 ini_set( 'display_errors', 0 );
-ini_set( 'max_execution_time', 60 );
-set_time_limit( 60 );
+ini_set( 'max_execution_time', 1000 );
+set_time_limit( 1000 );
 
 header( 'Content-Type: application/json' );
 header( 'Cache-Control: no-cache, must-revalidate' );

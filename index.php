@@ -393,7 +393,7 @@ require_once 'config.php';
     <a href="" class="artist-link" target="_blank">
       <div class="artist-card">
         <button class="exclude-button" onclick="event.preventDefault(); excludeArtist(this)">
-          Don't recommend
+          Recommend less
         </button>
         <img class="artist-image">
         <div class="artist-content">
