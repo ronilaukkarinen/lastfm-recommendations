@@ -4,13 +4,15 @@ class LastFmRecommender {
   private $username;
   private $baseUrl = 'http://ws.audioscrobbler.com/2.0/';
   private $cacheDir = 'cache';
-  private $cacheTime = 3600; // Increased cache time to 1 hour
+  private $cacheTime = 3600;
   private $knownArtistRatio = 0.3; // 30% known, 70% new artists
-  private $maxTopArtists = 15; // Reduced from 30
-  private $maxSimilarArtists = 5; // Reduced from 8
-  private $number_of_recommendations = 24; // Fixed at 24 (6 rows × 4 columns)
+  private $maxTopArtists = 15;
+  private $maxSimilarArtists = 5;
+  private $number_of_recommendations = 24;
+  private $excludeListFile = 'excludelist.json';
+  private $streamContext = null;
 
-  public function __construct( $apiKey, $username ) {
+  public function __construct( $apiKey, $username ) { // phpcs:ignore
 		$this->apiKey = $apiKey;
 		$this->username = $username;
 
@@ -51,6 +53,47 @@ class LastFmRecommender {
 		file_put_contents( $logFile, $logMessage, FILE_APPEND );
   }
 
+  private function getExcludeList() {
+    $excludePath = $this->cacheDir . '/' . $this->excludeListFile;
+    if ( ! file_exists( $excludePath ) ) {
+      file_put_contents( $excludePath, json_encode( [] ) );
+      return [];
+    }
+
+    return json_decode( file_get_contents( $excludePath ), true ) ?? [];
+  }
+
+  public function addToExcludeList( $artistName ) {
+    try {
+      $excludePath = $this->cacheDir . '/' . $this->excludeListFile;
+      $excludeList = $this->getExcludeList();
+
+      if ( ! in_array( $artistName, $excludeList ) ) {
+        $excludeList[] = $artistName;
+        if ( file_put_contents( $excludePath, json_encode( $excludeList ) ) === false ) {
+          throw new Exception( 'Failed to write to exclude list file' );
+        }
+      }
+
+      return true;
+    } catch ( Exception $e ) {
+      $this->log( 'Error adding artist to exclude list', [
+        'artist' => $artistName,
+        'error' => $e->getMessage(),
+      ] );
+      throw $e;
+    }
+  }
+
+  private function isExcluded( $artistName ) {
+    $excludeList = $this->getExcludeList();
+    return in_array( $artistName, $excludeList );
+  }
+
+  public function setStreamContext( $context ) {
+    $this->streamContext = $context;
+  }
+
   public function getTopArtists() {
 		$params = [
       'method' => 'user.gettopartists',
@@ -61,7 +104,7 @@ class LastFmRecommender {
 		];
 
 		$url = $this->baseUrl . '?' . http_build_query( $params );
-		$response = @file_get_contents( $url );
+		$response = @file_get_contents( $url, false, $this->streamContext );
 
 		if ( $response === false ) {
 		  $error = error_get_last();
@@ -96,7 +139,7 @@ class LastFmRecommender {
 		];
 
 		$url = $this->baseUrl . '?' . http_build_query( $params );
-		$response = file_get_contents( $url );
+		$response = @file_get_contents( $url, false, $this->streamContext );
 		return json_decode( $response, true );
   }
 
@@ -140,7 +183,7 @@ class LastFmRecommender {
 		];
 
 		$url = $this->baseUrl . '?' . http_build_query( $params );
-		$response = file_get_contents( $url );
+		$response = @file_get_contents( $url, false, $this->streamContext );
 		$data = json_decode( $response, true );
 
 		if ( isset( $data['artisttracks']['track'][0]['date']['uts'] ) ) {
@@ -150,141 +193,157 @@ class LastFmRecommender {
 		return null;
   }
 
-  public function getRecommendations() {
-		$cacheKey = $this->getCacheKey( 'recommendations', [ $this->username ] );
-		$cached = $this->getFromCache( $cacheKey );
-
-		if ( $cached !== null ) {
-		  return $cached;
+  public function getRecommendations( $isReplacement = false ) {
+    if ( $isReplacement ) {
+      return $this->getOneNewRecommendation();
     }
 
-		// Add sleep between API calls to avoid rate limiting
-		$topArtists = $this->getTopArtists();
-		usleep( 100000 ); // 0.1 second delay
+    $cacheKey = $this->getCacheKey( 'recommendations', [ $this->username ] );
+    $cached = $this->getFromCache( $cacheKey );
 
-		$knownArtists = [];
-		$newArtists = [];
-		$processedArtists = [];
+    if ( $cached !== null && count( $cached ) === $this->number_of_recommendations ) {
+      return $cached;
+    }
 
-		// Limit the number of top artists to process
-		$topArtistsToProcess = array_slice( $topArtists['topartists']['artist'], 0, $this->maxTopArtists );
+    // Initialize arrays
+    $knownArtists = [];
+    $newArtists = [];
+    $processedArtists = [];
 
-		foreach ( $topArtistsToProcess as $artist ) {
-		  usleep( 100000 ); // 0.1 second delay between API calls
-		  $similar = $this->getSimilarArtists( $artist['name'] );
+    $topArtists = $this->getTopArtists();
+    usleep( 100000 );
 
-		  if ( ! isset( $similar['similarartists']['artist'] ) ) {
-				continue;
-		  }
+    $targetKnown = ceil( $this->number_of_recommendations * $this->knownArtistRatio );
+    $targetNew = $this->number_of_recommendations - $targetKnown;
 
-		  // Process limited number of similar artists
-		  $similarArtistsToProcess = array_slice( $similar['similarartists']['artist'], 0, $this->maxSimilarArtists );
+    // Process all top artists until we have enough recommendations
+    foreach ( $topArtists['topartists']['artist'] as $artist ) {
+      if ( count( $knownArtists ) >= $targetKnown && count( $newArtists ) >= $targetNew ) {
+        break;
+      }
 
-		  foreach ( $similarArtistsToProcess as $similarArtist ) {
-				if ( isset( $processedArtists[$similarArtist['name']] ) ) {
-				  continue;
-				}
-				$processedArtists[$similarArtist['name']] = true;
+      usleep( 100000 );
+      $similar = $this->getSimilarArtists( $artist['name'] );
 
-				usleep( 100000 ); // 0.1 second delay
-				$artistInfo = $this->getArtistInfo( $similarArtist['name'] );
+      if ( ! isset( $similar['similarartists']['artist'] ) ) {
+        continue;
+      }
 
-				if ( ! isset( $artistInfo['artist'] )) continue;
+      foreach ( $similar['similarartists']['artist'] as $similarArtist ) {
+        if ( isset( $processedArtists[$similarArtist['name']] ) ) {
+          continue;
+        }
 
-				$isKnown = false;
-				$userplaycount = 0;
+        $processedArtists[$similarArtist['name']] = true;
 
-				// Check if this is a known artist and get play count
-				foreach ( $topArtistsToProcess as $topArtist ) {
-					if ( strtolower( $topArtist['name'] ) === strtolower( $similarArtist['name'] ) ) {
-						$isKnown = true;
-						$userplaycount = $topArtist['playcount'];
-						break;
-					}
-					}
+        // Skip if explicitly excluded
+        if ( $this->isExcluded( $similarArtist['name'] ) ) {
+          continue;
+        }
 
-				// If not found in top artists, try to get play count from artist.getInfo
-				if ( ! $isKnown && isset( $artistInfo['artist']['stats']['userplaycount'] ) ) {
-					$userplaycount = $artistInfo['artist']['stats']['userplaycount'];
-					$isKnown = $userplaycount > 0;
-					}
+        usleep( 100000 );
+        $artistInfo = $this->getArtistInfo( $similarArtist['name'] );
 
-				$recommendation = [
-					'name' => $similarArtist['name'],
-					'match' => $similarArtist['match'],
-					'url' => $similarArtist['url'],
-					'image' => $this->getArtistImageFromPage( $similarArtist['name'] ),
-					'listeners' => $artistInfo['artist']['stats']['listeners'] ?? '0',
-					'playcount' => $artistInfo['artist']['stats']['playcount'] ?? '0',
-					'summary' => strip_tags( $artistInfo['artist']['bio']['summary'] ?? '' ),
-					'tags' => array_slice( array_column( $artistInfo['artist']['tags']['tag'] ?? [], 'name' ), 0, 5 ),
-					'isKnown' => $isKnown,
-					'userplaycount' => $userplaycount,
-					'lastplayed' => $this->getLastPlayedTime( $similarArtist['name'] ),
-				];
+        if ( ! isset( $artistInfo['artist'] ) ) {
+          continue;
+        }
 
-				if ( $isKnown ) {
-					$knownArtists[] = $recommendation;
-					} else {
-					$newArtists[] = $recommendation;
-					}
+        $isKnown = false;
+        $userplaycount = 0;
 
-				// Break earlier if we have enough recommendations
-				if ( count( $knownArtists ) >= 10 && count( $newArtists ) >= 15 ) {
-				  break;
-				}
-		    }
-			}
+        // Check if this is a known artist and get play count
+        foreach ( $topArtists['topartists']['artist'] as $topArtist ) {
+          if ( strtolower( $topArtist['name'] ) === strtolower( $similarArtist['name'] ) ) {
+            $isKnown = true;
+            $userplaycount = $topArtist['playcount'];
+            break;
+          }
+        }
 
-		shuffle( $knownArtists );
-		shuffle( $newArtists );
+        // If not found in top artists, try to get play count from artist.getInfo
+        if ( ! $isKnown && isset( $artistInfo['artist']['stats']['userplaycount'] ) ) {
+          $userplaycount = $artistInfo['artist']['stats']['userplaycount'];
+          $isKnown = $userplaycount > 0;
+        }
 
-		$knownCount = min( ceil( $this->number_of_recommendations * $this->knownArtistRatio ), count( $knownArtists ) );
-		$newCount = $this->number_of_recommendations - $knownCount;
+        $recommendation = [
+          'name' => $similarArtist['name'],
+          'match' => $similarArtist['match'],
+          'url' => $similarArtist['url'],
+          'image' => $this->getArtistImageFromPage( $similarArtist['name'] ),
+          'listeners' => $artistInfo['artist']['stats']['listeners'] ?? '0',
+          'playcount' => $artistInfo['artist']['stats']['playcount'] ?? '0',
+          'summary' => strip_tags( $artistInfo['artist']['bio']['summary'] ?? '' ),
+          'tags' => array_slice( array_column( $artistInfo['artist']['tags']['tag'] ?? [], 'name' ), 0, 5 ),
+          'isKnown' => $isKnown,
+          'userplaycount' => $userplaycount,
+          'lastplayed' => $this->getLastPlayedTime( $similarArtist['name'] ),
+        ];
 
-		// If we don't have enough known artists, get more new ones
-		if ( $knownCount < ceil( $this->number_of_recommendations * $this->knownArtistRatio ) ) {
-		  $newCount = min( $this->number_of_recommendations, count( $newArtists ) );
-			}
+        if ( $isKnown ) {
+          $knownArtists[] = $recommendation;
+        } else {
+          $newArtists[] = $recommendation;
+        }
 
-		$recommendations = array_merge(
-		array_slice( $knownArtists, 0, $knownCount ),
-		array_slice( $newArtists, 0, $newCount )
-		);
+        // Break earlier if we have enough recommendations
+        if ( count( $knownArtists ) >= $targetKnown && count( $newArtists ) >= $targetNew ) {
+          break 2;
+        }
+      }
+    }
 
-		shuffle( $recommendations );
-		$this->saveToCache( $cacheKey, $recommendations );
+    // Ensure we have exactly 24 recommendations
+    $recommendations = array_merge(
+      array_slice( $knownArtists, 0, $targetKnown ),
+      array_slice( $newArtists, 0, $targetNew )
+    );
 
-		// Always return exactly 24 recommendations
-		$finalRecommendations = array_slice( $recommendations, 0, $this->number_of_recommendations );
+    shuffle( $recommendations );
+    $this->saveToCache( $cacheKey, $recommendations );
 
-		// If we don't have enough, pad with new artists
-		if ( count( $finalRecommendations ) < $this->number_of_recommendations ) {
-		  $remainingRecommendations = $this->number_of_recommendations - count( $finalRecommendations );
-		  // Get more new artists if needed
-		  while ( $newArtistsCount < $remainingRecommendations ) {
-				foreach ( $topArtistsToProcess as $artist ) {
-				  $similar = $this->getSimilarArtists( $artist['name'] );
-				  if ( ! isset( $similar['similarartists']['artist'] )) continue;
+    return $recommendations;
+  }
 
-				  foreach ( $similar['similarartists']['artist'] as $similarArtist ) {
-						if (isset( $processedArtists[$similarArtist['name']] )) continue;
-						// Process artist and add to newArtists array...
-						// (Same logic as before for processing artists)
-						if (count( $newArtists ) >= ( $this->number_of_recommendations - count( $finalRecommendations ) )) break 2;
-				  }
-					}
-		  }
+  private function getOneNewRecommendation() {
+    $topArtists = $this->getTopArtists();
+    $processedArtists = [];
+    foreach ( array_slice( $topArtists['topartists']['artist'], 0, $this->maxTopArtists ) as $artist ) {
+      $similar = $this->getSimilarArtists( $artist['name'] );
 
-		  // Add more new artists to reach 24
-		  $remainingCount = $this->number_of_recommendations - count( $finalRecommendations );
-		  $finalRecommendations = array_merge(
-			$finalRecommendations,
-			array_slice( $newArtists, 0, $remainingCount )
-		  );
-			}
+      if ( ! isset( $similar['similarartists']['artist'] ) ) {
+        continue;
+      }
 
-		return $finalRecommendations;
+      foreach ( $similar['similarartists']['artist'] as $similarArtist ) {
+        if ( isset( $processedArtists[$similarArtist['name']] ) ) {
+          continue;
+        }
+
+        $processedArtists[$similarArtist['name']] = true;
+        $artistInfo = $this->getArtistInfo( $similarArtist['name'] );
+
+        if ( ! isset( $artistInfo['artist'] ) ) {
+          continue;
+        }
+
+        return [
+          'name' => $similarArtist['name'],
+          'match' => $similarArtist['match'],
+          'url' => $similarArtist['url'],
+          'image' => $this->getArtistImageFromPage( $similarArtist['name'] ),
+          'listeners' => $artistInfo['artist']['stats']['listeners'] ?? '0',
+          'playcount' => $artistInfo['artist']['stats']['playcount'] ?? '0',
+          'summary' => strip_tags( $artistInfo['artist']['bio']['summary'] ?? '' ),
+          'tags' => array_slice( array_column( $artistInfo['artist']['tags']['tag'] ?? [], 'name' ), 0, 5 ),
+          'isKnown' => false,
+          'userplaycount' => $artistInfo['artist']['stats']['userplaycount'] ?? 0,
+          'lastplayed' => $this->getLastPlayedTime( $similarArtist['name'] ),
+        ];
+      }
+    }
+
+    return null;
   }
 
   public function getCacheExpiry() {

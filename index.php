@@ -1,11 +1,11 @@
 <?php
 require_once 'config.php';
 ?>
-<!DOCTYPE html>
+<!doctype html>
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>last.fm Discover (Unofficial)</title>
+  <title>Last.fm Discover (Unofficial)</title>
   <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     :root {
@@ -284,6 +284,83 @@ require_once 'config.php';
     .footer a:hover {
       text-decoration: underline;
     }
+
+    .next-update {
+      font-size: 0.9rem;
+      color: #666;
+    }
+
+    .exclude-button {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(0, 0, 0, 0.7);
+      border: none;
+      color: #fff;
+      padding: 5px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      z-index: 2;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+
+    .artist-card:hover .exclude-button {
+      opacity: 1;
+    }
+
+    .exclude-button:hover {
+      background: rgba(213, 16, 7, 0.9);
+    }
+
+    .exclude-button[title] {
+      background: rgba(213, 16, 7, 0.7);
+      cursor: not-allowed;
+    }
+
+    .exclude-button[title]:hover {
+      background: rgba(213, 16, 7, 0.7);
+    }
+
+    .exclude-button[title]::after {
+      content: attr(title);
+      position: absolute;
+      bottom: 100%;
+      right: 0;
+      background: rgba(0, 0, 0, 0.8);
+      padding: 5px 10px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      white-space: nowrap;
+      visibility: hidden;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+
+    .exclude-button[title]:hover::after {
+      visibility: visible;
+      opacity: 1;
+    }
+
+    .artist-card.excluded {
+      opacity: 0.5;
+      transition: opacity 0.3s;
+    }
+
+    .artist-card.excluded:hover {
+      opacity: 0.8;
+    }
+
+    .artist-card.excluded .exclude-button {
+      opacity: 1;
+      background: rgba(0, 0, 0, 0.5);
+      cursor: not-allowed;
+    }
+
+    .artist-card.excluded .exclude-button:hover {
+      background: rgba(0, 0, 0, 0.5);
+    }
   </style>
 </head>
 <body>
@@ -297,6 +374,7 @@ require_once 'config.php';
           Last.fm recommendations
         </h1>
       </div>
+      <div id="next-update" class="next-update"></div>
     </div>
     <div id="recommendations" class="recommendations">
       <div class="loader">
@@ -314,6 +392,9 @@ require_once 'config.php';
   <template id="artist-template">
     <a href="" class="artist-link" target="_blank">
       <div class="artist-card">
+        <button class="exclude-button" onclick="event.preventDefault(); excludeArtist(this)">
+          Don't recommend
+        </button>
         <img class="artist-image">
         <div class="artist-content">
           <div class="artist-name"></div>
@@ -334,165 +415,437 @@ require_once 'config.php';
     }).format(num).replace(/,/g, ' ');
   }
 
-  async function fetchRecommendations() {
-    const template = document.getElementById('artist-template');
-    if (!template) {
-      console.error('Template element not found');
-      return;
-    }
+  // Update the localStorage functions to handle timestamps
+  function getExcludedArtists() {
+    const excluded = JSON.parse(localStorage.getItem('excludedArtists') || '[]');
+    const now = Date.now();
+    const twoDaysMs = 2 * 24 * 60 * 60 * 1000; // 2 days in milliseconds
 
-    const progress = document.getElementById('progress');
-    const progressText = document.getElementById('progress-text');
-    const container = document.getElementById('recommendations');
+    // Filter out expired entries and update storage
+    const validExcludes = excluded.filter(entry => {
+      return (now - entry.timestamp) < twoDaysMs;
+    });
 
-    // Reset container and progress if needed
-    if (!progress || !progressText) {
-      container.innerHTML = `
-        <div class="loader">
-          <div>Loading recommendations...</div>
-          <div class="progress-container">
-            <div class="progress-bar">
-              <div class="progress" id="progress"></div>
-            </div>
-            <div id="progress-text">0%</div>
-          </div>
-        </div>
-      `;
-      return fetchRecommendations();
-    }
+    // Update storage with only valid entries
+    localStorage.setItem('excludedArtists', JSON.stringify(validExcludes));
 
-    let progressValue = 0;
-    const progressInterval = setInterval(() => {
-      if (progressValue < 90) {
-        // Slower at the beginning, faster towards 90%
-        const increment = Math.max(1, Math.floor((90 - progressValue) / 20));
-        progressValue += increment;
-        progress.style.width = `${progressValue}%`;
-        progressText.textContent = `${progressValue}%`;
-      }
-    }, 600);
+    // Return just the artist names for compatibility
+    return validExcludes.map(entry => entry.name);
+  }
 
-    try {
-      const response = await fetch('api.php');
-      const data = await response.json();
+  function addExcludedArtist(artistName) {
+    const excluded = JSON.parse(localStorage.getItem('excludedArtists') || '[]');
+    const now = Date.now();
 
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to fetch recommendations');
-      }
-
-      const recommendations = data.recommendations;
-
-      clearInterval(progressInterval);
-      progress.style.width = '100%';
-      progressText.textContent = '100%';
-
-      setTimeout(() => {
-        container.innerHTML = '';
-        recommendations.forEach(artist => {
-          const clone = template.content.cloneNode(true);
-          const link = clone.querySelector('.artist-link');
-          const img = clone.querySelector('.artist-image');
-
-          link.href = artist.url;
-
-          if (artist.image) {
-            console.log('Setting image for', artist.name, ':', artist.image);
-            img.src = artist.image;
-            img.alt = artist.name;
-            img.onerror = () => {
-              console.log('Image failed to load for', artist.name);
-              img.remove();
-              const placeholder = document.createElement('div');
-              placeholder.className = 'artist-image';
-              placeholder.style.display = 'flex';
-              placeholder.style.alignItems = 'center';
-              placeholder.style.justifyContent = 'center';
-              placeholder.style.backgroundColor = '#e5e7eb';
-              placeholder.style.fontSize = '2rem';
-              placeholder.style.fontWeight = 'bold';
-              placeholder.textContent = artist.name[0].toUpperCase();
-              link.querySelector('.artist-card').insertBefore(placeholder, link.querySelector('.artist-content'));
-            };
-          } else {
-            console.log('No image for', artist.name);
-            // If no image, remove the img element and add a placeholder
-            img.remove();
-            const placeholder = document.createElement('div');
-            placeholder.className = 'artist-image';
-            placeholder.style.display = 'flex';
-            placeholder.style.alignItems = 'center';
-            placeholder.style.justifyContent = 'center';
-            placeholder.style.backgroundColor = '#e5e7eb';
-            placeholder.textContent = artist.name[0].toUpperCase();
-            link.querySelector('.artist-card').insertBefore(placeholder, link.querySelector('.artist-content'));
-          }
-          clone.querySelector('.artist-name').textContent = artist.name;
-          clone.querySelector('.artist-stats').innerHTML =
-            `<div>${formatNumberEU(artist.listeners)} listeners • ${formatNumberEU(artist.playcount)} plays</div>` +
-            (artist.isKnown ?
-              `<div>${formatNumberEU(artist.userplaycount)} plays by you</div>` +
-              (artist.lastplayed ?
-                `<div>Last played ${new Date(parseInt(artist.lastplayed) * 1000).toLocaleDateString('en-GB', {
-                  day: 'numeric',
-                  month: 'long',
-                  year: 'numeric'
-                })}</div>` :
-                '') :
-              `<div class="new-artist-message">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M2 20h2c.55 0 1-.45 1-1v-9c0-.55-.45-1-1-1H2v11zm19.83-7.12c.11-.25.17-.52.17-.8V11c0-1.1-.9-2-2-2h-5.5l.92-4.65c.05-.22.02-.46-.08-.66-.23-.45-.52-.86-.88-1.22L14 2 7.59 8.41C7.21 8.79 7 9.3 7 9.83v7.84C7 18.95 8.05 20 9.34 20h8.11c.7 0 1.36-.37 1.72-.97l2.66-6.15z"/>
-                </svg>
-                ${artist.userplaycount > 0
-                  ? `This artist is new to you, only ${formatNumberEU(artist.userplaycount)} plays - give them a spin!`
-                  : 'You have not listened to this artist before, give them a spin!'
-                }
-              </div>`) +
-            `<div class="match-reason">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
-              </svg>
-              We chose this because ${
-                artist.isKnown ?
-                (artist.lastplayed ?
-                  `you haven't played this artist since ${new Date(parseInt(artist.lastplayed) * 1000).toLocaleDateString('en-GB', {
-                    month: 'long',
-                    year: 'numeric'
-                  })}` :
-                  'you already like this artist') :
-                'it\'s similar to artists you like'
-              } (${Math.round(artist.match * 100)}% match)
-            </div>`;
-          clone.querySelector('.artist-summary').textContent = artist.summary;
-
-          const tagsContainer = clone.querySelector('.artist-tags');
-          artist.tags.forEach(tag => {
-            const span = document.createElement('span');
-            span.className = 'tag';
-            span.textContent = tag;
-            tagsContainer.appendChild(span);
-          });
-
-          container.appendChild(clone);
-        });
-      }, 500);
-    } catch (error) {
-      const container = document.getElementById('recommendations');
-      if (container) {
-        let errorMessage = error.message || 'Please try again later.';
-
-        container.innerHTML = `
-          <div class="error-message">
-            <div style="margin-bottom: 1rem;">${errorMessage}</div>
-            <button onclick="location.reload()" class="retry-button">Retry</button>
-          </div>
-        `;
-      }
-      console.error('Recommendation fetch error:', error);
+    // Check if artist is already excluded
+    if (!excluded.some(entry => entry.name === artistName)) {
+      excluded.push({
+        name: artistName,
+        timestamp: now
+      });
+      localStorage.setItem('excludedArtists', JSON.stringify(excluded));
     }
   }
 
-  // Start loading when page loads
-  fetchRecommendations();
+  // Add this helper function to get time remaining for exclude
+  function getExcludeTimeRemaining(artistName) {
+    const excluded = JSON.parse(localStorage.getItem('excludedArtists') || '[]');
+    const entry = excluded.find(e => e.name === artistName);
+
+    if (!entry) return null;
+
+    const now = Date.now();
+    const twoDaysMs = 2 * 24 * 60 * 60 * 1000;
+    const remaining = twoDaysMs - (now - entry.timestamp);
+
+    return remaining > 0 ? remaining : null;
+  }
+
+  // Update the exclude button to show remaining time on hover
+  function updateExcludeButton(button, artistName) {
+    const remaining = getExcludeTimeRemaining(artistName);
+    if (remaining) {
+      const hours = Math.floor(remaining / (60 * 60 * 1000));
+      const minutes = Math.floor((remaining % (60 * 60 * 1000)) / (60 * 1000));
+      button.title = `Will be available again in ${hours}h ${minutes}m`;
+    }
+  }
+
+  // Update the fetchRecommendations function
+  async function fetchRecommendations(refresh = false) {
+    const template = document.getElementById('artist-template');
+    const container = document.getElementById('recommendations');
+
+    if (!template || !container) {
+      console.error('Required elements not found');
+      return;
+    }
+
+    // Show initial loading state
+    container.innerHTML = `
+      <div class="loader">
+        <div>Loading recommendations...</div>
+        <div class="progress-container">
+          <div class="progress-bar">
+            <div class="progress" id="progress"></div>
+          </div>
+          <div id="progress-text">0%</div>
+        </div>
+      </div>
+    `;
+
+    const progress = document.getElementById('progress');
+    const progressText = document.getElementById('progress-text');
+    let progressValue = 0;
+    let progressInterval;
+
+    const updateProgress = (value) => {
+      progressValue = value;
+      if (progress) {
+        progress.style.width = `${value}%`;
+        progressText.textContent = `${Math.round(value)}%`;
+      }
+    };
+
+    try {
+      updateProgress(0);
+
+      // Use a longer timeout for the initial load
+      const timeoutDuration = refresh ? 90000 : 120000; // 120s for initial, 90s for refresh
+
+      // Start progress animation
+      const startTime = Date.now();
+      const maxLoadTime = timeoutDuration - 5000; // Leave 5s buffer
+
+      progressInterval = setInterval(() => {
+        const elapsed = Date.now() - startTime;
+        const progress = Math.min(85, (elapsed / maxLoadTime) * 100);
+        updateProgress(progress);
+
+        if (progress >= 85) {
+          clearInterval(progressInterval);
+        }
+      }, 100);
+
+      // Add cache-busting parameter and progress tracking
+      const url = new URL(refresh ? 'api.php?refresh=1' : 'api.php', window.location.href);
+      url.searchParams.append('_', Date.now()); // Cache busting
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutDuration);
+
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        }
+      });
+
+      clearTimeout(timeoutId);
+      clearInterval(progressInterval);
+
+      if (!response.ok) {
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          const errorData = await response.json();
+          console.error('API Error:', errorData);
+          throw new Error(errorData.error || 'Server error');
+        }
+        console.error('Network Error:', response.status, response.statusText);
+        throw new Error(`Network error (${response.status}): ${response.statusText}`);
+      }
+
+      const data = await response.json();
+
+      if (!data.recommendations) {
+        throw new Error('Invalid response format');
+      }
+
+      updateProgress(100);
+
+      // Short delay before showing recommendations
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      // Get excluded artists from localStorage
+      const excluded = getExcludedArtists();
+
+      // Clear the container and add recommendations
+      container.innerHTML = '';
+
+      if (Array.isArray(data.recommendations)) {
+        data.recommendations.forEach(artist => {
+          const clone = template.content.cloneNode(true);
+          const card = clone.querySelector('.artist-card');
+
+          const isExcluded = excluded.includes(artist.name);
+          if (isExcluded) {
+            card.classList.add('excluded');
+            const excludeButton = card.querySelector('.exclude-button');
+            excludeButton.textContent = 'Recommend less';
+            excludeButton.disabled = true;
+          }
+
+          fillArtistCard(card, artist);
+          container.appendChild(clone);
+        });
+      } else {
+        throw new Error('Invalid recommendations data received');
+      }
+
+      updateNextUpdateTime();
+
+    } catch (error) {
+      if (progressInterval) {
+        clearInterval(progressInterval);
+      }
+
+      console.error('Recommendation fetch error:', error);
+
+      let errorMessage = error.message;
+      let debugInfo = '';
+
+      if (error.name === 'AbortError') {
+        errorMessage = 'The request is taking longer than usual. You can try:';
+      } else {
+        try {
+          // Try to parse the error message if it's JSON
+          const errorData = JSON.parse(error.message);
+          if (errorData.debug) {
+            console.error('Debug info:', errorData.debug);
+            debugInfo = `
+              <details style="margin-top: 1rem; font-size: 0.8rem; color: #666;">
+                <summary>Technical details</summary>
+                <pre style="text-align: left; margin-top: 0.5rem;">${JSON.stringify(errorData.debug, null, 2)}</pre>
+              </details>
+            `;
+          }
+        } catch (e) {
+          // Not JSON, use the error message as is
+          debugInfo = `
+            <details style="margin-top: 1rem; font-size: 0.8rem; color: #666;">
+              <summary>Technical details</summary>
+              <pre style="text-align: left; margin-top: 0.5rem;">${error.toString()}</pre>
+            </details>
+          `;
+        }
+      }
+
+      container.innerHTML = `
+        <div class="error-message">
+          <div style="margin-bottom: 1rem;">
+            ${errorMessage}
+          </div>
+          ${error.name === 'AbortError' ? `
+            <div style="margin-bottom: 1rem; font-size: 0.9rem; color: #666;">
+              1. Refreshing the page<br>
+              2. Waiting a few minutes and trying again<br>
+              3. Checking if Last.fm is experiencing issues
+            </div>
+          ` : ''}
+          ${debugInfo}
+          <button onclick="fetchRecommendations(true)" class="retry-button">Retry</button>
+        </div>
+      `;
+    }
+  }
+
+  function formatTime(hours, minutes, seconds) {
+    const parts = [];
+
+    if (hours > 0) {
+      parts.push(`${hours} hour${hours !== 1 ? 's' : ''}`);
+    }
+    if (minutes > 0) {
+      parts.push(`${minutes} minute${minutes !== 1 ? 's' : ''}`);
+    }
+    if (seconds > 0 || parts.length === 0) {
+      parts.push(`${seconds} second${seconds !== 1 ? 's' : ''}`);
+    }
+
+    return `Next batch of recommendations in ${parts.join(', ')}`;
+  }
+
+  function updateNextUpdateTime() {
+    const nextUpdateEl = document.getElementById('next-update');
+
+    // Don't show anything while recommendations are loading
+    if (document.querySelector('.loader')) {
+      nextUpdateEl.textContent = '';
+      return;
+    }
+
+    fetch('api.php?cache_expiry')
+      .then(response => response.json())
+      .then(data => {
+        let expirySeconds = data.expiry;
+
+        if (expirySeconds <= 0) {
+          nextUpdateEl.textContent = 'New recommendations available';
+          return;
+        }
+
+        // Update the countdown every second
+        const updateCountdown = () => {
+          if (expirySeconds <= 0) {
+            nextUpdateEl.textContent = 'New recommendations available';
+            return;
+          }
+
+          const hours = Math.floor(expirySeconds / 3600);
+          const minutes = Math.floor((expirySeconds % 3600) / 60);
+          const seconds = Math.floor(expirySeconds % 60);
+
+          nextUpdateEl.textContent = formatTime(hours, minutes, seconds);
+          expirySeconds--;
+        };
+
+        // Initial update
+        updateCountdown();
+
+        // Update every second
+        const countdownInterval = setInterval(updateCountdown, 1000);
+
+        // Clear interval when the page is hidden
+        document.addEventListener('visibilitychange', () => {
+          if (document.hidden) {
+            clearInterval(countdownInterval);
+          }
+        });
+      })
+      .catch(error => {
+        console.error('Error fetching cache expiry:', error);
+        nextUpdateEl.textContent = '';
+      });
+  }
+
+  // Add this line at the end of your script to trigger the initial load
+  document.addEventListener('DOMContentLoaded', () => {
+    fetchRecommendations();
+  });
+
+  // Keep the interval for regular updates
+  setInterval(updateNextUpdateTime, 60000);
+
+  // Update the excludeArtist function
+  async function excludeArtist(button) {
+    const artistCard = button.closest('.artist-card');
+    const artistName = artistCard.querySelector('.artist-name').textContent;
+
+    try {
+      // Add to localStorage
+      addExcludedArtist(artistName);
+
+      // Update UI to show excluded state
+      artistCard.classList.add('excluded');
+      button.textContent = 'Recommend less';
+      button.disabled = true;
+
+    } catch (error) {
+      console.error('Error excluding artist:', error);
+      alert('Failed to exclude artist. Please try again.');
+    }
+  }
+
+  // Update the fillArtistCard function
+  function fillArtistCard(card, artist) {
+    const link = card.closest('.artist-link') || card.parentElement;
+    link.href = artist.url;
+
+    // Handle image
+    const img = card.querySelector('.artist-image');
+    if (artist.image) {
+      img.src = artist.image;
+      img.alt = artist.name;
+      img.onerror = () => {
+        img.remove();
+        const placeholder = document.createElement('div');
+        placeholder.className = 'artist-image';
+        placeholder.style.display = 'flex';
+        placeholder.style.alignItems = 'center';
+        placeholder.style.justifyContent = 'center';
+        placeholder.style.backgroundColor = '#e5e7eb';
+        placeholder.style.fontSize = '2rem';
+        placeholder.style.fontWeight = 'bold';
+        placeholder.textContent = artist.name[0].toUpperCase();
+        card.insertBefore(placeholder, card.querySelector('.artist-content'));
+      };
+    } else {
+      img.remove();
+      const placeholder = document.createElement('div');
+      placeholder.className = 'artist-image';
+      placeholder.style.display = 'flex';
+      placeholder.style.alignItems = 'center';
+      placeholder.style.justifyContent = 'center';
+      placeholder.style.backgroundColor = '#e5e7eb';
+      placeholder.textContent = artist.name[0].toUpperCase();
+      card.insertBefore(placeholder, card.querySelector('.artist-content'));
+    }
+
+    // Fill in text content
+    card.querySelector('.artist-name').textContent = artist.name;
+
+    // Fill in stats
+    const statsContainer = card.querySelector('.artist-stats');
+    const statsHtml = [];
+
+    // Add listeners and plays
+    statsHtml.push(`<div>${formatNumberEU(artist.listeners)} listeners • ${formatNumberEU(artist.playcount)} plays</div>`);
+
+    // Add user plays info
+    if (artist.isKnown) {
+      statsHtml.push(`<div>${formatNumberEU(artist.userplaycount)} plays by you</div>`);
+      if (artist.lastplayed) {
+        statsHtml.push(`<div>Last played ${new Date(parseInt(artist.lastplayed) * 1000).toLocaleDateString('en-GB', {
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric'
+        })}</div>`);
+      }
+    } else {
+      statsHtml.push(`<div class="new-artist-message">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M2 20h2c.55 0 1-.45 1-1v-9c0-.55-.45-1-1-1H2v11zm19.83-7.12c.11-.25.17-.52.17-.8V11c0-1.1-.9-2-2-2h-5.5l.92-4.65c.05-.22.02-.46-.08-.66-.23-.45-.52-.86-.88-1.22L14 2 7.59 8.41C7.21 8.79 7 9.3 7 9.83v7.84C7 18.95 8.05 20 9.34 20h8.11c.7 0 1.36-.37 1.72-.97l2.66-6.15z"/>
+        </svg>
+        ${artist.userplaycount > 0
+          ? `This artist is new to you, only ${formatNumberEU(artist.userplaycount)} plays - give them a spin!`
+          : 'You have not listened to this artist before, give them a spin!'
+        }
+      </div>`);
+    }
+
+    // Add match reason
+    statsHtml.push(`<div class="match-reason">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+      </svg>
+      We chose this because ${
+        artist.isKnown
+          ? (artist.lastplayed
+            ? `you haven't played this artist since ${new Date(parseInt(artist.lastplayed) * 1000).toLocaleDateString('en-GB', {
+                month: 'long',
+                year: 'numeric'
+              })}`
+            : 'you already like this artist')
+          : 'it\'s similar to artists you like'
+      } (${Math.round(artist.match * 100)}% match)
+    </div>`);
+
+    statsContainer.innerHTML = statsHtml.join('');
+
+    // Fill in summary
+    card.querySelector('.artist-summary').textContent = artist.summary;
+
+    // Fill in tags
+    const tagsContainer = card.querySelector('.artist-tags');
+    tagsContainer.innerHTML = '';
+    artist.tags.forEach(tag => {
+      const span = document.createElement('span');
+      span.className = 'tag';
+      span.textContent = tag;
+      tagsContainer.appendChild(span);
+    });
+  }
   </script>
 
   <footer class="footer">
