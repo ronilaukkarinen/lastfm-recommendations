@@ -16,6 +16,16 @@ require_once 'config.php';
       --text: #fff;
     }
 
+    .new-artist-message {
+      align-items: center;
+      color: #4fd1c5;
+      font-size: 0.8rem;
+      display: flex;
+      gap: 6px;
+      margin-top: 0.5rem;
+      align-items: start;
+    }
+
     body {
       font-family: 'Barlow', sans-serif;
       background-color: var(--dark-bg);
@@ -109,6 +119,21 @@ require_once 'config.php';
       color: var(--muted-text);
       font-size: 0.9rem;
       margin-bottom: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .artist-stats > * {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+    }
+
+    .artist-stats svg {
+      min-width: 15px;
+      min-height: 15px;
+      margin-top: 2px;
     }
 
     .artist-summary {
@@ -124,15 +149,16 @@ require_once 'config.php';
     .artist-tags {
       display: flex;
       flex-wrap: wrap;
-      gap: 0.5rem;
+      gap: 6px;
     }
 
     .tag {
-      background: var(--lastfm-red);
+      background: #161616;
       color: var(--text);
       padding: 0.25rem 0.75rem;
       border-radius: 1rem;
       font-size: 0.8rem;
+      text-transform: lowercase;
     }
 
     .artist-link {
@@ -229,6 +255,10 @@ require_once 'config.php';
       font-size: 0.8rem;
       display: block;
       margin-top: 0.5rem;
+    }
+
+    .match-reason svg {
+      transform: translate(-1px, 2px);
     }
 
     .footer {
@@ -344,8 +374,12 @@ require_once 'config.php';
 
     try {
       const response = await fetch('api.php');
-      if (!response.ok) throw new Error('Failed to fetch recommendations');
       const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to fetch recommendations');
+      }
+
       const recommendations = data.recommendations;
 
       clearInterval(progressInterval);
@@ -394,18 +428,40 @@ require_once 'config.php';
           }
           clone.querySelector('.artist-name').textContent = artist.name;
           clone.querySelector('.artist-stats').innerHTML =
-            `${formatNumberEU(artist.listeners)} listeners • ${formatNumberEU(artist.playcount)} plays` +
-            (artist.isKnown ? `<br>${formatNumberEU(artist.userplaycount)} plays by you` : '') +
-            `<br><span class="match-reason"><svg style="transform: translate(-1px, 3px);" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg> We chose this because ${
-              artist.isKnown ?
+            `<div>${formatNumberEU(artist.listeners)} listeners • ${formatNumberEU(artist.playcount)} plays</div>` +
+            (artist.isKnown ?
+              `<div>${formatNumberEU(artist.userplaycount)} plays by you</div>` +
               (artist.lastplayed ?
-                `you last played this artist on ${new Date(artist.lastplayed * 1000).toLocaleDateString('en-GB', {
+                `<div>Last played ${new Date(parseInt(artist.lastplayed) * 1000).toLocaleDateString('en-GB', {
+                  day: 'numeric',
                   month: 'long',
                   year: 'numeric'
-                })}` :
-                'you already like this artist') :
-              'it\'s similar to artists you like'
-            } (${Math.round(artist.match * 100)}% match)</span>`;
+                })}</div>` :
+                '') :
+              `<div class="new-artist-message">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M2 20h2c.55 0 1-.45 1-1v-9c0-.55-.45-1-1-1H2v11zm19.83-7.12c.11-.25.17-.52.17-.8V11c0-1.1-.9-2-2-2h-5.5l.92-4.65c.05-.22.02-.46-.08-.66-.23-.45-.52-.86-.88-1.22L14 2 7.59 8.41C7.21 8.79 7 9.3 7 9.83v7.84C7 18.95 8.05 20 9.34 20h8.11c.7 0 1.36-.37 1.72-.97l2.66-6.15z"/>
+                </svg>
+                ${artist.userplaycount > 0
+                  ? `This artist is new to you, only ${formatNumberEU(artist.userplaycount)} plays - give them a spin!`
+                  : 'You have not listened to this artist before, give them a spin!'
+                }
+              </div>`) +
+            `<div class="match-reason">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+              </svg>
+              We chose this because ${
+                artist.isKnown ?
+                (artist.lastplayed ?
+                  `you haven't played this artist since ${new Date(parseInt(artist.lastplayed) * 1000).toLocaleDateString('en-GB', {
+                    month: 'long',
+                    year: 'numeric'
+                  })}` :
+                  'you already like this artist') :
+                'it\'s similar to artists you like'
+              } (${Math.round(artist.match * 100)}% match)
+            </div>`;
           clone.querySelector('.artist-summary').textContent = artist.summary;
 
           const tagsContainer = clone.querySelector('.artist-tags');
@@ -422,9 +478,11 @@ require_once 'config.php';
     } catch (error) {
       const container = document.getElementById('recommendations');
       if (container) {
+        let errorMessage = error.message || 'Please try again later.';
+
         container.innerHTML = `
           <div class="error-message">
-            <div>Failed to load recommendations from Last.fm API. Please try again later.</div>
+            <div style="margin-bottom: 1rem;">${errorMessage}</div>
             <button onclick="location.reload()" class="retry-button">Retry</button>
           </div>
         `;

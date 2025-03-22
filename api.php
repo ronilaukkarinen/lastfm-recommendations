@@ -1,6 +1,8 @@
 <?php
 error_reporting( E_ALL );
 ini_set( 'display_errors', 1 );
+ini_set( 'max_execution_time', 300 ); // Set timeout to 5 minutes
+set_time_limit( 300 ); // Alternative timeout setting
 
 header( 'Content-Type: application/json' );
 
@@ -16,11 +18,14 @@ try {
   }
 
   $recommendations = $recommender->getRecommendations();
-  echo json_encode([
+  echo json_encode( [
     'recommendations' => $recommendations,
     'cache_expiry' => $recommender->getCacheExpiry(),
-  ]);
+  ] );
 } catch ( Throwable $e ) {
-  http_response_code( 500 );
-  echo json_encode( [ 'error' => $e->getMessage() ] );
+  http_response_code( 503 ); // Service Unavailable
+  echo json_encode( [
+    'error' => 'The request took too long to process. Please try again.',
+    'details' => $e->getMessage()
+  ] );
 }
