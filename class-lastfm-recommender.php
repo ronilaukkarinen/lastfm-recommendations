@@ -7,13 +7,13 @@ class LastFmRecommender {
   private $cacheDir = 'cache';
   private $cacheTime = 3600;
   private $knownArtistRatio = 0.3; // 30% known, 70% new artists
-  private $maxTopArtists = 10;
-  private $maxSimilarArtists = 10;
+  private $maxTopArtists = 8;
+  private $maxSimilarArtists = 8;
   private $number_of_recommendations = 24;
   private $excludeListFile = 'excludelist.json';
   private $streamContext = null;
   private $maxConcurrentRequests = 5;
-  private $requestDelay = 50000; // 0.05 second delay between requests in microseconds
+  private $requestDelay = 25000; // 0.025 second delay between requests in microseconds
 
   public function __construct( $apiKey, $username ) {
     $this->apiKey = $apiKey;
@@ -162,7 +162,7 @@ class LastFmRecommender {
 		];
 
 		$url = $this->baseUrl . '?' . http_build_query( $params );
-		$response = file_get_contents( $url );
+		$response = @file_get_contents( $url, false, $this->streamContext );
 		return json_decode( $response, true );
   }
 
@@ -221,13 +221,13 @@ class LastFmRecommender {
 
   public function getRecommendations( $isReplacement = false ) {
     $cacheKey = $this->getCacheKey( 'recommendations', [ $this->username ] );
+    $excludeList = $this->getExcludeList();
 
     // Try to get from cache first
     if ( ! $isReplacement ) {
       $cached = $this->getFromCache( $cacheKey );
       if ( $cached !== null ) {
         // Filter out excluded artists from cached results
-        $excludeList = $this->getExcludeList();
         $cached = array_filter( $cached, function ( $artist ) use ( $excludeList ) {
           return ! in_array( $artist['name'], $excludeList );
         } );
@@ -241,13 +241,22 @@ class LastFmRecommender {
 
     try {
       $topArtists = $this->getTopArtists();
-      $recommendations = [];
+      $knownArtists = [];
+      $newArtists = [];
       $processedArtists = [];
       $attempts = 0;
-      $maxAttempts = 3; // Allow multiple passes through top artists if needed
-      $recommendationCount = count( $recommendations );
-      while ( $recommendationCount < $this->number_of_recommendations && $attempts < $maxAttempts ) {
+      $maxAttempts = 3;
+
+      $targetKnown = ceil( $this->number_of_recommendations * $this->knownArtistRatio );
+      $targetNew = $this->number_of_recommendations - $targetKnown;
+
+      while ( ( count( $knownArtists ) < $targetKnown || count( $newArtists ) < $targetNew ) && $attempts < $maxAttempts ) {
         $attempts++;
+
+        // Break early if we have enough recommendations
+        if ( count( $knownArtists ) >= $targetKnown && count( $newArtists ) >= $targetNew ) {
+          break;
+        }
 
         foreach ( array_slice( $topArtists['topartists']['artist'], 0, $this->maxTopArtists ) as $artist ) {
           try {
@@ -259,12 +268,13 @@ class LastFmRecommender {
             }
 
             foreach ( $similar['similarartists']['artist'] as $similarArtist ) {
-              if ( count( $recommendations ) >= $this->number_of_recommendations ) {
-                break 3;
+              // Break if we have enough recommendations
+              if ( count( $knownArtists ) >= $targetKnown && count( $newArtists ) >= $targetNew ) {
+                break 3; // Break out of all loops
               }
 
               // Skip if already processed or excluded
-              if ( isset( $processedArtists[$similarArtist['name']] ) || $this->isExcluded( $similarArtist['name'] ) ) {
+              if ( isset( $processedArtists[$similarArtist['name']] ) || in_array( $similarArtist['name'], $excludeList ) ) {
                 continue;
               }
 
@@ -278,7 +288,10 @@ class LastFmRecommender {
                   continue;
                 }
 
-                $recommendations[] = [
+                $isKnown = isset( $artistInfo['artist']['stats']['userplaycount'] ) &&
+                          $artistInfo['artist']['stats']['userplaycount'] > 0;
+
+                $recommendation = [
                   'name' => $similarArtist['name'],
                   'match' => $similarArtist['match'],
                   'url' => $similarArtist['url'],
@@ -287,11 +300,18 @@ class LastFmRecommender {
                   'playcount' => $artistInfo['artist']['stats']['playcount'] ?? '0',
                   'summary' => strip_tags( $artistInfo['artist']['bio']['summary'] ?? '' ),
                   'tags' => array_slice( array_column( $artistInfo['artist']['tags']['tag'] ?? [], 'name' ), 0, 5 ),
-                  'isKnown' => isset( $artistInfo['artist']['stats']['userplaycount'] ) && $artistInfo['artist']['stats']['userplaycount'] > 0,
+                  'isKnown' => $isKnown,
                   'userplaycount' => $artistInfo['artist']['stats']['userplaycount'] ?? 0,
                   'lastplayed' => $this->getLastPlayedTime( $similarArtist['name'] ),
-                  'isNewArtist' => ! isset( $artistInfo['artist']['stats']['userplaycount'] ) || $artistInfo['artist']['stats']['userplaycount'] == 0,
+                  'isNewArtist' => ! $isKnown,
                 ];
+
+                // Add to appropriate array if there's still room
+                if ( $isKnown && count( $knownArtists ) < $targetKnown ) {
+                  $knownArtists[] = $recommendation;
+                } elseif ( ! $isKnown && count( $newArtists ) < $targetNew ) {
+                  $newArtists[] = $recommendation;
+                }
 
                 usleep( $this->requestDelay );
 
@@ -313,6 +333,18 @@ class LastFmRecommender {
         }
       }
 
+      // Combine and shuffle recommendations
+      $recommendations = array_merge( $knownArtists, $newArtists );
+      shuffle( $recommendations );
+
+      $this->log( 'Recommendation counts', [
+        'known' => count( $knownArtists ),
+        'new' => count( $newArtists ),
+        'total' => count( $recommendations ),
+        'target_known' => $targetKnown,
+        'target_new' => $targetNew,
+      ] );
+
       if ( count( $recommendations ) < $this->number_of_recommendations ) {
         $this->log( 'Warning: Not enough recommendations', [
           'count' => count( $recommendations ),
@@ -320,7 +352,6 @@ class LastFmRecommender {
         ] );
       }
 
-      shuffle( $recommendations );
       $recommendations = array_slice( $recommendations, 0, $this->number_of_recommendations );
       $this->saveToCache( $cacheKey, $recommendations );
       return $recommendations;

@@ -1,8 +1,8 @@
 <?php
 error_reporting( E_ALL );
 ini_set( 'display_errors', 0 );
-ini_set( 'max_execution_time', 1000 );
-set_time_limit( 1000 );
+ini_set( 'max_execution_time', 90 );
+set_time_limit( 90 );
 
 header( 'Content-Type: application/json' );
 header( 'Cache-Control: no-cache, must-revalidate' );
@@ -37,7 +37,7 @@ try {
   // Update the stream context creation
   $ctx = stream_context_create([
     'http' => [
-      'timeout' => 10,
+      'timeout' => 15,
       'ignore_errors' => true,
       'user_agent' => 'PHP/LastFM-Recommendations',
       'follow_location' => 1,
