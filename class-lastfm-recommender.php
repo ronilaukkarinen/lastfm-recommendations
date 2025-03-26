@@ -6,9 +6,9 @@ class LastFmRecommender {
   private $baseUrl = 'http://ws.audioscrobbler.com/2.0/';
   private $cacheDir = 'cache';
   private $cacheTime = 7200;
-  private $knownArtistRatio = 0.3; // 30% known, 70% new artists
-  private $maxTopArtists = 4;
-  private $maxSimilarArtists = 4;
+  private $knownArtistRatio = 0.5; // 0.0-1.0 (0 = all new, 1 = all known)
+  private $maxTopArtists = 6;
+  private $maxSimilarArtists = 8;
   private $number_of_recommendations = 24;
   private $excludeListFile = 'excludelist.json';
   private $streamContext = null;
@@ -280,13 +280,16 @@ class LastFmRecommender {
 				return null;
 		  }
 
-		  // Only get lastplayed for known artists and skip image for new artists
+		  // Calculate match score if not provided
+		  $match = $artist['match'] ?? ( $isKnown ? 1.0 : 0.5 );
+
+		  // Only get lastplayed for known artists
 		  $lastplayed = $isKnown ? $this->getLastPlayedTime( $artist['name'] ) : null;
-		  $image = $isKnown ? $this->getArtistImageFromPage( $artist['name'] ) : null;
+		  $image = $this->getArtistImageFromPage( $artist['name'] );
 
 		  return [
         'name' => $artist['name'],
-        'match' => $artist['match'] ?? 0,
+        'match' => $match,
         'url' => $artist['url'] ?? '',
         'image' => $image,
         'listeners' => $artistInfo['artist']['stats']['listeners'] ?? '0',
